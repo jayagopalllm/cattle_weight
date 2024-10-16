@@ -1,1 +1,8 @@
 # List of dependencies
+torch
+numpy
+opencv-python
+Pillow
+matplotlib
+torchvision
+scipy
