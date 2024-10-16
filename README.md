@@ -16,3 +16,8 @@ This project focuses on predicting cattle weight based on keypoint data. By leve
 - [Contributing](#contributing)
 - [License](#license)
 
+## Overview
+
+The goal of this project is to build a deep learning regression model that predicts the weight of cattle using keypoint data. Key points represent specific parts of the cattle's body, such as the head, legs, and torso, and are used to estimate the weight.
+
+## Dataset
