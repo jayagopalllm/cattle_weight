@@ -71,6 +71,7 @@ step 2:  Cattle Detection and Measurement
 """
 Cattle body measurement system using RealSense D435i
 Extracts key body measurements for weight prediction
+Enhanced with debugging capabilities
 """
 
 import pyrealsense2 as rs
@@ -86,6 +87,7 @@ class CattleMeasurement:
         self.config = rs.config()
         self.align = None
         self.measurements = []
+        self.debug_mode = True  # Enable debugging
         
         # Configure streams
         self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
@@ -121,30 +123,87 @@ class CattleMeasurement:
         return depth_image, color_image
     
     def detect_cattle_contour(self, depth_image, color_image):
-        """Detect cattle contour using depth thresholding"""
-        # Convert depth to 8-bit for processing
-        depth_8bit = cv2.convertScaleAbs(depth_image, alpha=0.03)
+        """Detect cattle contour using depth thresholding with enhanced debugging"""
         
-        # Create mask for objects within cattle distance (1-4 meters)
-        mask = cv2.inRange(depth_image, 1000, 4000)  # 1-4 meters in mm
+        # Debug: Print depth information
+        if self.debug_mode:
+            valid_depth = depth_image[depth_image > 0]
+            if len(valid_depth) > 0:
+                print(f"Depth range: {np.min(valid_depth)}-{np.max(valid_depth)}mm")
+                print(f"Valid depth pixels: {len(valid_depth)}/{depth_image.size}")
+            else:
+                print("No valid depth data!")
         
-        # Apply morphological operations to clean up mask
-        kernel = np.ones((5,5), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        # Create depth colormap for visualization
+        depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+        cv2.imshow('Raw Depth Colormap', depth_colormap)
         
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Try multiple distance ranges for detection
+        ranges_to_try = [
+            (500, 8000, "Wide Range (0.5-8m)"),
+            (1000, 4000, "Original Range (1-4m)"),
+            (800, 3000, "Medium Range (0.8-3m)"),
+            (200, 6000, "Very Wide Range (0.2-6m)")
+        ]
         
-        if contours:
-            # Get largest contour (assuming it's the cattle)
-            largest_contour = max(contours, key=cv2.contourArea)
+        best_contour = None
+        best_mask = None
+        best_area = 0
+        
+        for min_dist, max_dist, range_name in ranges_to_try:
+            # Create mask for objects within distance range
+            mask = cv2.inRange(depth_image, min_dist, max_dist)
             
-            # Filter by area (cattle should be reasonably large)
-            if cv2.contourArea(largest_contour) > 5000:  # Adjust threshold as needed
-                return largest_contour, mask
+            if self.debug_mode:
+                mask_pixels = np.count_nonzero(mask)
+                print(f"{range_name}: {mask_pixels} pixels in range")
+            
+            # Apply morphological operations to clean up mask
+            kernel = np.ones((5,5), np.uint8)
+            mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel)
+            
+            # Find contours
+            contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Get largest contour
+                largest_contour = max(contours, key=cv2.contourArea)
+                area = cv2.contourArea(largest_contour)
+                
+                if self.debug_mode:
+                    print(f"{range_name}: Largest contour area = {area}")
+                
+                # Use lower threshold for testing (reduced from 5000 to 1000)
+                if area > 1000 and area > best_area:
+                    best_contour = largest_contour
+                    best_mask = mask_clean
+                    best_area = area
+                    if self.debug_mode:
+                        print(f"New best contour found with area {area}")
         
-        return None, mask
+        # If still no detection, try even more permissive settings
+        if best_contour is None:
+            print("No contours found with normal settings, trying very permissive detection...")
+            
+            # Very wide range and low threshold
+            mask = cv2.inRange(depth_image, 100, 10000)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                area = cv2.contourArea(largest_contour)
+                print(f"Permissive detection: Found contour with area {area}")
+                
+                if area > 100:  # Very low threshold
+                    best_contour = largest_contour
+                    best_mask = mask
+        
+        # Show the mask being used
+        if best_mask is not None:
+            cv2.imshow('Detection Mask', best_mask)
+        
+        return best_contour, best_mask if best_mask is not None else np.zeros_like(depth_image[:,:], dtype=np.uint8)
     
     def calculate_measurements(self, contour, depth_image, depth_frame):
         """Calculate key body measurements from contour and depth data"""
@@ -166,6 +225,10 @@ class CattleMeasurement:
         center_x, center_y = x + w//2, y + h//2
         depth_at_center = depth_image[center_y, center_x]
         
+        if self.debug_mode:
+            print(f"Bounding box: {w}x{h} at ({x},{y})")
+            print(f"Depth at center: {depth_at_center}mm")
+        
         if depth_at_center > 0:
             # Convert pixel measurements to real-world measurements (meters)
             # This is a simplified calculation - for more accuracy, use point cloud
@@ -182,6 +245,9 @@ class CattleMeasurement:
             # Calculate approximate girth (circumference)
             # This is a rough estimation - actual implementation would need more sophisticated methods
             measurements['estimated_girth_m'] = 2 * np.pi * (measurements['estimated_height_m'] / 2)
+            
+            if self.debug_mode:
+                print(f"Real-world measurements: {measurements['estimated_width_m']:.2f}m x {measurements['estimated_height_m']:.2f}m")
         
         return measurements
     
@@ -214,7 +280,7 @@ class CattleMeasurement:
                 
                 # Draw contour on color image for visualization
                 display_image = color_image.copy()
-                cv2.drawContours(display_image, [contour], -1, (0, 255, 0), 2)
+                cv2.drawContours(display_image, [contour], -1, (0, 255, 0), 3)
                 
                 # Draw bounding box
                 x, y, w, h = cv2.boundingRect(contour)
@@ -225,7 +291,14 @@ class CattleMeasurement:
                     text = f"W: {measurements['estimated_width_m']:.2f}m H: {measurements['estimated_height_m']:.2f}m"
                     cv2.putText(display_image, text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
+                # Add area text
+                area_text = f"Area: {int(measurements['contour_area'])}"
+                cv2.putText(display_image, area_text, (x, y+h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                
                 return measurements, display_image, mask
+            else:
+                if self.debug_mode:
+                    print("No contour detected in this frame")
             
             return None, color_image, mask
             
@@ -249,8 +322,12 @@ class CattleMeasurement:
         if not self.start_camera():
             return
         
-        print("Cattle Measurement System Started")
-        print("Press 'c' to capture measurement, 'q' to quit")
+        print("Enhanced Cattle Measurement System Started")
+        print("Controls:")
+        print("  'c' - capture measurement")
+        print("  'd' - toggle debug mode")
+        print("  'q' - quit")
+        print(f"Debug mode: {'ON' if self.debug_mode else 'OFF'}")
         
         try:
             while True:
@@ -268,6 +345,11 @@ class CattleMeasurement:
                     self.save_measurement(measurements)
                     print("Measurement captured!")
                 
+                elif key == ord('d'):
+                    # Toggle debug mode
+                    self.debug_mode = not self.debug_mode
+                    print(f"Debug mode: {'ON' if self.debug_mode else 'OFF'}")
+                
                 elif key == ord('q'):
                     break
                     
@@ -283,4 +365,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
