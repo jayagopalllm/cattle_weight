@@ -32,7 +32,8 @@ config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
 pipeline.start(config)
 
 frame_count = 0
-print("Press 'q' to quit.")
+mode = 'color'  # Modes: 'color', 'grayscale', 'edge'
+print("Press 'q' to quit. Press 'c' for color, 'g' for grayscale, 'e' for edge mode.")
 
 try:
     while True:
@@ -46,8 +47,31 @@ try:
         orig_frame = frame.copy()
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        # --- Mode selection ---
+        if mode == 'color':
+            input_img = frame_rgb
+            display_img = frame_rgb.copy()
+            window_title = 'Mask R-CNN Segmentation (Color)'
+        elif mode == 'grayscale':
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_gray_3ch = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
+            input_img = frame_gray_3ch
+            display_img = frame_gray_3ch.copy()
+            window_title = 'Mask R-CNN Segmentation (Grayscale)'
+        elif mode == 'edge':
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(frame_gray, 100, 200)
+            edges_3ch = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+            input_img = edges_3ch
+            display_img = edges_3ch.copy()
+            window_title = 'Mask R-CNN Segmentation (Edge)'
+        else:
+            input_img = frame_rgb
+            display_img = frame_rgb.copy()
+            window_title = 'Mask R-CNN Segmentation (Color)'
+
         # --- Mask R-CNN ---
-        input_tensor = maskrcnn_transform(frame_rgb).to(device)
+        input_tensor = maskrcnn_transform(input_img).to(device)
         with torch.no_grad():
             outputs = maskrcnn([input_tensor])[0]
         masks = outputs['masks'] > 0.5  # [N, 1, H, W]
@@ -56,23 +80,31 @@ try:
             for m in masks:
                 maskrcnn_mask |= m[0]
             maskrcnn_mask_np = maskrcnn_mask.cpu().numpy().astype(np.uint8) * 255
-            maskrcnn_overlay = draw_segmentation_masks(torch.from_numpy(frame_rgb).permute(2,0,1), maskrcnn_mask, alpha=0.5)
+            # Overlay mask on processed image
+            maskrcnn_overlay = draw_segmentation_masks(torch.from_numpy(display_img).permute(2,0,1), maskrcnn_mask, alpha=0.5)
             maskrcnn_overlay = maskrcnn_overlay.permute(1,2,0).byte().cpu().numpy()
             maskrcnn_overlay = cv2.cvtColor(maskrcnn_overlay, cv2.COLOR_RGB2BGR)
         else:
             maskrcnn_mask_np = np.zeros((frame.shape[0], frame.shape[1]), dtype=np.uint8)
-            maskrcnn_overlay = orig_frame
+            maskrcnn_overlay = cv2.cvtColor(display_img, cv2.COLOR_RGB2BGR)
 
         # --- Display ---
-        cv2.imshow('Mask R-CNN Segmentation', maskrcnn_overlay)
+        cv2.imshow(window_title, maskrcnn_overlay)
 
         # --- Save mask and depth ---
         cv2.imwrite(f'test_cattle_weight/masks/maskrcnn/mask_{frame_count:05d}.png', maskrcnn_mask_np)
         cv2.imwrite(f'test_cattle_weight/depth/maskrcnn/depth_{frame_count:05d}.png', depth_image)
         frame_count += 1
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
             break
+        elif key == ord('c'):
+            mode = 'color'
+        elif key == ord('g'):
+            mode = 'grayscale'
+        elif key == ord('e'):
+            mode = 'edge'
 finally:
     pipeline.stop()
     cv2.destroyAllWindows() 
