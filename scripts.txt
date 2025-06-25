@@ -61,3 +61,226 @@ def test_camera():
 
 if __name__ == "__main__":
     test_camera()
+==============================================================================================================================================================
+
+
+
+step 2:  Cattle Detection and Measurement
+
+#!/usr/bin/env python3
+"""
+Cattle body measurement system using RealSense D435i
+Extracts key body measurements for weight prediction
+"""
+
+import pyrealsense2 as rs
+import numpy as np
+import cv2
+import json
+from datetime import datetime
+import os
+
+class CattleMeasurement:
+    def __init__(self):
+        self.pipeline = rs.pipeline()
+        self.config = rs.config()
+        self.align = None
+        self.measurements = []
+        
+        # Configure streams
+        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        
+        # Create alignment object
+        self.align = rs.align(rs.stream.color)
+        
+    def start_camera(self):
+        """Start the RealSense camera"""
+        try:
+            self.pipeline.start(self.config)
+            print("Camera started successfully!")
+            return True
+        except Exception as e:
+            print(f"Failed to start camera: {e}")
+            return False
+    
+    def stop_camera(self):
+        """Stop the RealSense camera"""
+        self.pipeline.stop()
+        cv2.destroyAllWindows()
+    
+    def preprocess_frame(self, depth_frame, color_frame):
+        """Preprocess frames for measurement"""
+        # Convert to numpy arrays
+        depth_image = np.asanyarray(depth_frame.get_data())
+        color_image = np.asanyarray(color_frame.get_data())
+        
+        # Apply depth filtering
+        depth_image = cv2.medianBlur(depth_image.astype(np.uint16), 5)
+        
+        return depth_image, color_image
+    
+    def detect_cattle_contour(self, depth_image, color_image):
+        """Detect cattle contour using depth thresholding"""
+        # Convert depth to 8-bit for processing
+        depth_8bit = cv2.convertScaleAbs(depth_image, alpha=0.03)
+        
+        # Create mask for objects within cattle distance (1-4 meters)
+        mask = cv2.inRange(depth_image, 1000, 4000)  # 1-4 meters in mm
+        
+        # Apply morphological operations to clean up mask
+        kernel = np.ones((5,5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            # Get largest contour (assuming it's the cattle)
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            # Filter by area (cattle should be reasonably large)
+            if cv2.contourArea(largest_contour) > 5000:  # Adjust threshold as needed
+                return largest_contour, mask
+        
+        return None, mask
+    
+    def calculate_measurements(self, contour, depth_image, depth_frame):
+        """Calculate key body measurements from contour and depth data"""
+        measurements = {}
+        
+        # Get bounding rectangle
+        x, y, w, h = cv2.boundingRect(contour)
+        
+        # Calculate basic measurements
+        measurements['bounding_width'] = w
+        measurements['bounding_height'] = h
+        measurements['contour_area'] = cv2.contourArea(contour)
+        
+        # Get depth intrinsics for real-world measurements
+        depth_intrinsics = depth_frame.profile.as_video_stream_profile().intrinsics
+        
+        # Calculate real-world dimensions
+        # Get depth at center of bounding box
+        center_x, center_y = x + w//2, y + h//2
+        depth_at_center = depth_image[center_y, center_x]
+        
+        if depth_at_center > 0:
+            # Convert pixel measurements to real-world measurements (meters)
+            # This is a simplified calculation - for more accuracy, use point cloud
+            pixel_size = depth_at_center / depth_intrinsics.fx  # Approximate pixel size at that depth
+            
+            measurements['estimated_width_m'] = w * pixel_size / 1000  # Convert to meters
+            measurements['estimated_height_m'] = h * pixel_size / 1000
+            measurements['depth_at_center_m'] = depth_at_center / 1000
+            
+            # Calculate body length (assuming side view)
+            # For more accuracy, you'd need to identify specific body parts
+            measurements['estimated_length_m'] = measurements['estimated_width_m']
+            
+            # Calculate approximate girth (circumference)
+            # This is a rough estimation - actual implementation would need more sophisticated methods
+            measurements['estimated_girth_m'] = 2 * np.pi * (measurements['estimated_height_m'] / 2)
+        
+        return measurements
+    
+    def capture_measurement(self):
+        """Capture a single measurement"""
+        try:
+            # Wait for frames
+            frames = self.pipeline.wait_for_frames()
+            
+            # Align frames
+            aligned_frames = self.align.process(frames)
+            depth_frame = aligned_frames.get_depth_frame()
+            color_frame = aligned_frames.get_color_frame()
+            
+            if not depth_frame or not color_frame:
+                return None, None, None
+            
+            # Preprocess frames
+            depth_image, color_image = self.preprocess_frame(depth_frame, color_frame)
+            
+            # Detect cattle contour
+            contour, mask = self.detect_cattle_contour(depth_image, color_image)
+            
+            if contour is not None:
+                # Calculate measurements
+                measurements = self.calculate_measurements(contour, depth_image, depth_frame)
+                
+                # Add timestamp
+                measurements['timestamp'] = datetime.now().isoformat()
+                
+                # Draw contour on color image for visualization
+                display_image = color_image.copy()
+                cv2.drawContours(display_image, [contour], -1, (0, 255, 0), 2)
+                
+                # Draw bounding box
+                x, y, w, h = cv2.boundingRect(contour)
+                cv2.rectangle(display_image, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                
+                # Add measurement text
+                if 'estimated_width_m' in measurements:
+                    text = f"W: {measurements['estimated_width_m']:.2f}m H: {measurements['estimated_height_m']:.2f}m"
+                    cv2.putText(display_image, text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                return measurements, display_image, mask
+            
+            return None, color_image, mask
+            
+        except Exception as e:
+            print(f"Error capturing measurement: {e}")
+            return None, None, None
+    
+    def save_measurement(self, measurements, filename="cattle_measurements.json"):
+        """Save measurements to JSON file"""
+        if measurements:
+            self.measurements.append(measurements)
+            
+            # Save to file
+            with open(filename, 'w') as f:
+                json.dump(self.measurements, f, indent=2)
+            
+            print(f"Measurement saved: {measurements}")
+    
+    def run_measurement_session(self):
+        """Run interactive measurement session"""
+        if not self.start_camera():
+            return
+        
+        print("Cattle Measurement System Started")
+        print("Press 'c' to capture measurement, 'q' to quit")
+        
+        try:
+            while True:
+                measurements, display_image, mask = self.capture_measurement()
+                
+                if display_image is not None:
+                    # Show images
+                    cv2.imshow('Cattle Detection', display_image)
+                    cv2.imshow('Depth Mask', mask)
+                
+                key = cv2.waitKey(1) & 0xFF
+                
+                if key == ord('c') and measurements:
+                    # Capture measurement
+                    self.save_measurement(measurements)
+                    print("Measurement captured!")
+                
+                elif key == ord('q'):
+                    break
+                    
+        except KeyboardInterrupt:
+            print("Measurement session interrupted")
+        
+        finally:
+            self.stop_camera()
+
+def main():
+    measurer = CattleMeasurement()
+    measurer.run_measurement_session()
+
+if __name__ == "__main__":
+    main()
+
