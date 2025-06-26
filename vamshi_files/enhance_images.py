@@ -30,6 +30,9 @@ if mode == 'folder':
         if fname.lower().endswith('.png'):
             img_path = os.path.join(input_dir, fname)
             img = cv2.imread(img_path, 0)  # Load as grayscale
+            if img is None:
+                print(f"Failed to load image: {img_path}")
+                continue
             enhanced = enhance_image(img)
             out_path = os.path.join(output_dir, fname)
             cv2.imwrite(out_path, enhanced)
