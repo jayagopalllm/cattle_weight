@@ -9,6 +9,9 @@ from torchvision import transforms
 # Install with: pip install segmentation-models-pytorch timm
 import segmentation_models_pytorch as smp
 
+# Print available encoders for user reference
+print('Available encoders:', smp.encoders.get_encoder_names())
+
 # Output directories
 os.makedirs('masks', exist_ok=True)
 os.makedirs('depth', exist_ok=True)
@@ -16,8 +19,9 @@ os.makedirs('depth', exist_ok=True)
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Choose backbone: 'mobilenet_v3_large' or 'efficientnet-b0'
-BACKBONE = 'mobilenet_v3_large'  # or 'efficientnet-b0'
+# Choose backbone: 'mobilenet_v2' or 'efficientnet-b0' (mobilenet_v3_large is not supported)
+BACKBONE = 'mobilenet_v2'  # or 'efficientnet-b0'
+print(f'Using backbone: {BACKBONE}')
 model = smp.Unet(
     encoder_name=BACKBONE,
     encoder_weights='imagenet',
