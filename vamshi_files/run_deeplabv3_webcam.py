@@ -14,6 +14,13 @@ os.makedirs('test_cattle_weight/grayscale/deeplabv3', exist_ok=True)
 # Device configuration
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Use the new weights API to avoid deprecation warnings
+from torchvision.models.segmentation import DeepLabV3_MobileNet_V3_Large_Weights
+weights = DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
+model = torchvision.models.segmentation.deeplabv3_mobilenet_v3_large(weights=weights)
+model.eval()
+model.to(device)
+
 def get_palette():
     # Standard Pascal VOC palette
     palette = np.array([
@@ -26,22 +33,23 @@ def get_palette():
     ], dtype=np.uint8)
     return palette
 
-# Load pre-trained DeepLabV3 MobileNetV3 Large
-model = torchvision.models.segmentation.deeplabv3_mobilenet_v3_large(pretrained=True)
-model.eval()
-model.to(device)
-
 # For DeepLabV3
 deeplab_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
+# Check for RealSense device availability
+ctx = rs.context()
+if len(ctx.devices) == 0:
+    raise RuntimeError("No Intel RealSense device found. Please connect the camera and try again.")
+
 # RealSense pipeline setup
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.color, 320, 240, rs.format.bgr8, 15)
-config.enable_stream(rs.stream.depth, 320, 240, rs.format.z16, 15)
+# Lower FPS to 6 for better compatibility
+config.enable_stream(rs.stream.color, 320, 240, rs.format.bgr8, 6)
+config.enable_stream(rs.stream.depth, 320, 240, rs.format.z16, 6)
 pipeline.start(config)
 
 frame_count = 0
